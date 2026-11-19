@@ -1,4 +1,4 @@
--- 33 v4.0 - painel preto e branco para o cliente Roblox.
+-- 33 v5.1 - painel preto e branco para o cliente Roblox.
 -- RShift / Insert: menu | RMB / Q: mira | G: speed | F: voo | N: noclip
 -- Voo: WASD, Espaco para subir e Ctrl esquerdo para descer.
 -- Nao utiliza Drawing, bibliotecas remotas ou carregamento pela internet.
@@ -199,37 +199,38 @@ do
     end
 end
 
--- Shared policy: signature is verified before JSON fields are trusted.
-local LicensePolicy = {}
+-- Online receipts are signed; the short key stays separate.
+local LicenseOnline = {}
 local function integer(value)
     return type(value) == "number" and value == value and value >= 0
         and value <= 9007199254740991 and value == math.floor(value)
 end
-function LicensePolicy.check(token, now, playerId, decodeJson, crypto)
-    if type(token) ~= "string" or #token > 8192 then return nil, "Key invalida." end
-    token = token:gsub("%s+", "")
-    local payloadPart, signaturePart = token:match("^33%.([A-Za-z0-9_-]+)%.([A-Za-z0-9_-]+)$")
-    if not payloadPart then return nil, "Cole uma key gerada pelo vendedor." end
+function LicenseOnline.normalize(value)
+    if type(value) ~= "string" then return nil end
+    local key = value:match("^%s*(.-)%s*$"):upper()
+    if key:match("^33%-%w%w%w%w%-%w%w%w%w%-%w%w%w%w$") and not key:find("_") then return key end
+    return nil
+end
+function LicenseOnline.check(receipt, nonce, userId, decodeJson, crypto)
+    if type(receipt) ~= "string" or #receipt > 8192 then return nil, "Resposta de licenca invalida." end
+    local payloadPart, signaturePart = receipt:match("^33%.([A-Za-z0-9_-]+)%.([A-Za-z0-9_-]+)$")
+    if not payloadPart then return nil, "Assinatura de licenca ausente." end
     local payload, signature = crypto.decode(payloadPart), crypto.decode(signaturePart)
-    if not payload or not signature or not crypto.verify(payload, signature) then
-        return nil, "Key invalida ou modificada."
-    end
-    local decoded, data = pcall(decodeJson, payload)
-    if not decoded or type(data) ~= "table" or data.v ~= 1 or data.product ~= "33-HUB"
+    if not payload or not signature or not crypto.verify(payload, signature) then return nil, "Assinatura de licenca invalida." end
+    local ok, data = pcall(decodeJson, payload)
+    if not ok or type(data) ~= "table" or data.v ~= 1 or data.product ~= "33-HUB"
         or type(data.id) ~= "string" or #data.id == 0 or #data.id > 100
-        or not integer(data.issuedAt) or not integer(data.expiresAt) or not integer(data.userId)
-        or type(data.customer) ~= "string" or #data.customer > 512 then
-        return nil, "Formato de licenca invalido."
-    end
-    if data.issuedAt > now + 120 then return nil, "Confira o relogio do computador." end
-    if data.expiresAt ~= 0 and (data.expiresAt <= now or data.expiresAt <= data.issuedAt) then
-        return nil, "Essa key expirou. Peca uma nova ao vendedor."
-    end
-    if data.userId ~= 0 and data.userId ~= playerId then
-        return nil, "Essa key pertence a outra conta Roblox."
+        or type(data.customer) ~= "string" or #data.customer > 512
+        or not integer(data.issuedAt) or not integer(data.expiresAt) or not integer(data.licenseExpiresAt)
+        or data.expiresAt <= data.issuedAt or data.expiresAt > data.issuedAt + 90
+        or (data.licenseExpiresAt ~= 0 and data.expiresAt > data.licenseExpiresAt)
+        or data.userId ~= userId or data.nonce ~= nonce then
+        return nil, "Licenca inesperada. Tente novamente."
     end
     return data
 end
+
+local LICENSE_SERVER = "https://hub33-licencas.navytapir20.chatgpt.site"
 
 local cleanup = function() end
 
@@ -1270,71 +1271,64 @@ local function start()
     reopen.Visible = false
 
     main = make("Frame", gui, {
-        Name = "MainFrame",
-        Size = UDim2.fromOffset(380, 560),
-        Position = UDim2.fromOffset(16, 62),
-        BackgroundColor3 = Color3.fromRGB(15, 15, 15),
-        BorderSizePixel = 0,
-        Active = true,
-        ZIndex = 20,
-        Visible = false,
+        Name = "MainFrame", Size = UDim2.fromOffset(790, 580),
+        Position = UDim2.fromOffset(32, 72),
+        BackgroundColor3 = Color3.fromRGB(12, 12, 12),
+        BorderSizePixel = 0, Active = true, ZIndex = 20, Visible = false,
     })
-    round(main, 12)
-    make("UIStroke", main, { Color = ACCENT, Thickness = 1, Transparency = 0.35 })
+    round(main, 16)
+    local mainScale = make("UIScale", main, { Scale = 1 })
+    make("UIStroke", main, { Color = Color3.fromRGB(65, 65, 65), Thickness = 1 })
+    local sidebar = make("Frame", main, {
+        Size = UDim2.new(0, 174, 1, 0), BackgroundColor3 = Color3.fromRGB(18, 18, 18), BorderSizePixel = 0,
+    })
+    round(sidebar, 16)
+    brandImage(sidebar, UDim2.fromOffset(100, 92), UDim2.fromOffset(37, 18))
+    local brandTitle = label(sidebar, "33  /  HUB", 18)
+    brandTitle.Size = UDim2.fromOffset(150, 24)
+    brandTitle.Position = UDim2.fromOffset(12, 112)
+    brandTitle.TextXAlignment = Enum.TextXAlignment.Center
+    brandTitle.Font = Enum.Font.GothamBold
+    local brandCaption = label(sidebar, "CONTROLE TOTAL", 9)
+    brandCaption.Size = UDim2.fromOffset(150, 18)
+    brandCaption.Position = UDim2.fromOffset(12, 139)
+    brandCaption.TextXAlignment = Enum.TextXAlignment.Center
+    brandCaption.TextColor3 = Color3.fromRGB(120, 120, 120)
     local header = make("Frame", main, {
-        Size = UDim2.new(1, 0, 0, 66),
-        BackgroundColor3 = Color3.fromRGB(10, 10, 10),
-        BorderSizePixel = 0,
-        Active = true,
+        Position = UDim2.fromOffset(194, 0), Size = UDim2.new(1, -214, 0, 88),
+        BackgroundTransparency = 1, Active = true,
     })
-    round(header, 12)
-    local title = label(header, "33  /  v4.0", 16)
+    local title = label(header, "MIRA", 25)
     title.Font = Enum.Font.GothamBold
-    title.TextColor3 = ACCENT
-    title.Size = UDim2.new(1, -126, 0, 28)
-    title.Position = UDim2.fromOffset(76, 9)
-    brandImage(header, UDim2.fromOffset(54, 54), UDim2.fromOffset(10, 6))
-    local subtitle = label(header, "MIRA  /  ESP  /  MOVIMENTO", 9)
-    subtitle.Size = UDim2.new(1, -126, 0, 18)
-    subtitle.Position = UDim2.fromOffset(76, 35)
-    subtitle.TextColor3 = Color3.fromRGB(155, 155, 155)
+    title.Size = UDim2.new(1, -55, 0, 35)
+    title.Position = UDim2.fromOffset(0, 15)
+    local subtitle = label(header, "Ajuste o painel ao seu jeito.", 12)
+    subtitle.Size = UDim2.new(1, -50, 0, 23)
+    subtitle.Position = UDim2.fromOffset(0, 52)
+    subtitle.TextColor3 = Color3.fromRGB(145, 145, 145)
     local close = button(header, "X")
-    close.Size = UDim2.fromOffset(30, 28)
-    close.Position = UDim2.new(1, -40, 0, 18)
+    close.Size = UDim2.fromOffset(32, 32)
+    close.Position = UDim2.new(1, -32, 0, 22)
+    close.BackgroundColor3 = Color3.fromRGB(34, 34, 34)
+    close.TextColor3 = ACCENT
     close.Modal = true
-
-    local navigation = make("Frame", main, {
-        Size = UDim2.new(1, -20, 0, 30),
-        Position = UDim2.fromOffset(10, 74),
-        BackgroundTransparency = 1,
+    local navigation = make("Frame", sidebar, {
+        Position = UDim2.fromOffset(12, 185), Size = UDim2.new(1, -24, 0, 300), BackgroundTransparency = 1,
     })
-    make("UIListLayout", navigation, {
-        FillDirection = Enum.FillDirection.Horizontal,
-        Padding = UDim.new(0, 4),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-    })
-
+    make("UIListLayout", navigation, { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder })
+    local versionLabel = label(sidebar, "33  /  V5.1\nPRETO & BRANCO", 10)
+    versionLabel.Size = UDim2.new(1, -28, 0, 38)
+    versionLabel.Position = UDim2.new(0, 14, 1, -60)
+    versionLabel.TextColor3 = Color3.fromRGB(115, 115, 115)
     local content = make("ScrollingFrame", main, {
-        Name = "Content",
-        Position = UDim2.fromOffset(10, 114),
-        Size = UDim2.new(1, -20, 1, -170),
-        BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 4,
-        ScrollBarImageColor3 = ACCENT,
-        ScrollingDirection = Enum.ScrollingDirection.Y,
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        CanvasSize = UDim2.new(),
+        Name = "Content", Position = UDim2.fromOffset(194, 94), Size = UDim2.new(1, -214, 1, -162),
+        BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+        ScrollBarImageColor3 = Color3.fromRGB(100, 100, 100), ScrollingDirection = Enum.ScrollingDirection.Y,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
     })
-    make("UIListLayout", content, {
-        Padding = UDim.new(0, 10),
-        SortOrder = Enum.SortOrder.LayoutOrder,
-        HorizontalAlignment = Enum.HorizontalAlignment.Center,
-    })
-    make("UIPadding", content, {
-        PaddingTop = UDim.new(0, 2),
-        PaddingBottom = UDim.new(0, 8),
-    })
+    make("UIListLayout", content, { Padding = UDim.new(0, 14), SortOrder = Enum.SortOrder.LayoutOrder,
+        HorizontalAlignment = Enum.HorizontalAlignment.Center })
+    make("UIPadding", content, { PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 12) })
 
     local sectionOrder = 0
     local rowOrders = {}
@@ -1352,17 +1346,18 @@ local function start()
         local frame = make("Frame", content, {
             Size = UDim2.new(1, -8, 0, 0),
             AutomaticSize = Enum.AutomaticSize.Y,
-            BackgroundColor3 = Color3.fromRGB(26, 26, 26),
+            BackgroundColor3 = Color3.fromRGB(21, 21, 21),
             BorderSizePixel = 0,
             LayoutOrder = sectionOrder,
         })
-        round(frame, 8)
+        round(frame, 12)
+        make("UIStroke", frame, { Color = Color3.fromRGB(43, 43, 43), Thickness = 1 })
         make("UIPadding", frame, {
-            PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10),
-            PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 10),
+            PaddingLeft = UDim.new(0, 18), PaddingRight = UDim.new(0, 18),
+            PaddingTop = UDim.new(0, 14), PaddingBottom = UDim.new(0, 16),
         })
         make("UIListLayout", frame, {
-            Padding = UDim.new(0, 6),
+            Padding = UDim.new(0, 10),
             SortOrder = Enum.SortOrder.LayoutOrder,
         })
         local headingRow = row(frame, 26)
@@ -1374,7 +1369,7 @@ local function start()
     end
 
     local function toggle(parent, text, getValue, setValue)
-        local frame = row(parent, 30)
+        local frame = row(parent, 36)
         local caption = label(frame, text)
         caption.Size = UDim2.new(1, -78, 1, 0)
         local control = button(frame, "")
@@ -1805,6 +1800,10 @@ local function start()
     }
     local function selectTab(name)
         sliderDrag = nil
+        title.Text = name
+        local descriptions = { MIRA = "FOV, intensidade e ativacao da mira.", ESP = "Visualizacao dos jogadores e noclip.",
+            SPEED = "Escolha sua velocidade de movimento.", VOO = "Ajuste os controles de voo.", PLAYERS = "Jogadores, teleporte e perfil publico.", MENU = "Sua licenca e controles do painel." }
+        subtitle.Text = descriptions[name] or "33 HUB"
         playerBrowser.active = name == "PLAYERS"
         if playerBrowser.active then
             playerBrowser.refresh()
@@ -1820,9 +1819,11 @@ local function start()
     for index, entry in ipairs(tabEntries) do
         local tab = entry
         local tabButton = button(navigation, tab[1])
-        tabButton.Size = UDim2.new(1 / #tabEntries, -4, 1, 0)
+        tabButton.Size = UDim2.new(1, 0, 0, 40)
         tabButton.LayoutOrder = index
-        tabButton.TextSize = 9
+        tabButton.TextSize = 12
+        tabButton.TextXAlignment = Enum.TextXAlignment.Left
+        make("UIPadding", tabButton, { PaddingLeft = UDim.new(0, 18) })
         tab[3] = tabButton
         connect(tabButton.Activated, function()
             selectTab(tab[1])
@@ -1831,12 +1832,12 @@ local function start()
     selectTab("MIRA")
 
     local controls = label(main, "RShift: menu | G: speed | F: voo | N: noclip", 10)
-    controls.Position = UDim2.new(0, 12, 1, -46)
-    controls.Size = UDim2.new(1, -24, 0, 18)
+    controls.Position = UDim2.new(0, 194, 1, -48)
+    controls.Size = UDim2.new(1, -218, 0, 18)
     controls.TextColor3 = Color3.fromRGB(161, 161, 161)
     statusLabel = label(main, "Carregando...", 10)
-    statusLabel.Position = UDim2.new(0, 12, 1, -26)
-    statusLabel.Size = UDim2.new(1, -24, 0, 18)
+    statusLabel.Position = UDim2.new(0, 194, 1, -27)
+    statusLabel.Size = UDim2.new(1, -218, 0, 18)
     statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
 
     local function constrainWindow()
@@ -1845,9 +1846,10 @@ local function start()
             return
         end
         local viewport = camera.ViewportSize
-        local width = math.max(120, math.min(380, viewport.X - 32))
-        local height = math.max(160, math.min(560, viewport.Y - 80))
-        main.Size = UDim2.fromOffset(width, height)
+        local scale = math.min(1, (viewport.X - 24) / 790, (viewport.Y - 80) / 580)
+        scale = math.max(0.2, scale)
+        mainScale.Scale = scale
+        local width, height = 790 * scale, 580 * scale
         local x = math.clamp(main.Position.X.Offset, 8, math.max(8, viewport.X - width - 8))
         local y = math.clamp(main.Position.Y.Offset, 56, math.max(56, viewport.Y - height - 8))
         main.Position = UDim2.fromOffset(x, y)
@@ -1865,64 +1867,56 @@ local function start()
     end
 
     local keyLayer = make("Frame", gui, {
-        Name = "KeyGate",
-        Size = UDim2.fromScale(1, 1),
-        BackgroundColor3 = Color3.new(0, 0, 0),
-        BackgroundTransparency = 0.15,
-        BorderSizePixel = 0,
-        Active = true,
-        ZIndex = 100,
+        Name = "KeyGate", Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0),
+        BackgroundTransparency = 0.18, BorderSizePixel = 0, Active = true, ZIndex = 100,
     })
     local keyCard = make("Frame", keyLayer, {
-        Size = UDim2.new(1, -32, 0, 390),
-        Position = UDim2.fromScale(0.5, 0.5),
-        AnchorPoint = Vector2.new(0.5, 0.5),
-        BackgroundColor3 = Color3.fromRGB(12, 12, 12),
-        BorderSizePixel = 0,
+        Size = UDim2.new(1, -32, 0, 430), Position = UDim2.fromScale(0.5, 0.5),
+        AnchorPoint = Vector2.new(0.5, 0.5), BackgroundColor3 = Color3.fromRGB(14, 14, 14), BorderSizePixel = 0,
     })
-    make("UISizeConstraint", keyCard, { MaxSize = Vector2.new(360, 390) })
-    round(keyCard, 14)
-    make("UIStroke", keyCard, { Color = ACCENT, Thickness = 1, Transparency = 0.2 })
-    local keyLogo = brandImage(keyCard, UDim2.fromOffset(140, 130), UDim2.new(0.5, -70, 0, 18))
-    keyLogo.BackgroundTransparency = 1
-    local keyTitle = label(keyCard, "33", 30)
+    make("UISizeConstraint", keyCard, { MaxSize = Vector2.new(420, 430) })
+    round(keyCard, 18)
+    make("UIStroke", keyCard, { Color = Color3.fromRGB(75, 75, 75), Thickness = 1 })
+    brandImage(keyCard, UDim2.fromOffset(130, 120), UDim2.new(0.5, -65, 0, 22))
+    local keyTitle = label(keyCard, "SEU ACESSO AO 33", 22)
     keyTitle.Font = Enum.Font.GothamBold
     keyTitle.TextXAlignment = Enum.TextXAlignment.Center
-    keyTitle.Size = UDim2.new(1, -32, 0, 36)
-    keyTitle.Position = UDim2.fromOffset(16, 152)
-    local keyHelp = label(keyCard, "Cole a key fornecida pelo vendedor.", 12)
+    keyTitle.Size = UDim2.new(1, -40, 0, 32)
+    keyTitle.Position = UDim2.fromOffset(20, 159)
+    local keyHelp = label(keyCard, "Uma key. Tudo sob seu controle.", 12)
+    keyHelp.TextColor3 = Color3.fromRGB(150, 150, 150)
     keyHelp.TextXAlignment = Enum.TextXAlignment.Center
-    keyHelp.Size = UDim2.new(1, -32, 0, 26)
-    keyHelp.Position = UDim2.fromOffset(16, 194)
+    keyHelp.Size = UDim2.new(1, -40, 0, 24)
+    keyHelp.Position = UDim2.fromOffset(20, 198)
     local keyBox = make("TextBox", keyCard, {
-        Size = UDim2.new(1, -40, 0, 40),
-        Position = UDim2.fromOffset(20, 230),
-        Text = "",
-        PlaceholderText = "Cole aqui sua key 33...",
-        PlaceholderColor3 = Color3.fromRGB(125, 125, 125),
-        TextColor3 = ACCENT,
-        BackgroundColor3 = Color3.fromRGB(25, 25, 25),
-        BorderSizePixel = 0,
-        ClearTextOnFocus = false,
-        MultiLine = false,
-        Font = Enum.Font.GothamMedium,
-        TextSize = 16,
+        Size = UDim2.new(1, -56, 0, 48), Position = UDim2.fromOffset(28, 242), Text = "",
+        PlaceholderText = "33-XXXX-XXXX-XXXX", PlaceholderColor3 = Color3.fromRGB(100, 100, 100),
+        TextColor3 = ACCENT, BackgroundColor3 = Color3.fromRGB(25, 25, 25),
+        BorderSizePixel = 0, ClearTextOnFocus = false, MultiLine = false, Font = Enum.Font.Code, TextSize = 20,
     })
-    round(keyBox, 7)
-    local keySubmit = button(keyCard, "ENTRAR")
-    keySubmit.Size = UDim2.new(1, -40, 0, 36)
-    keySubmit.Position = UDim2.fromOffset(20, 284)
+    round(keyBox, 8)
+    make("UIStroke", keyBox, { Color = Color3.fromRGB(55, 55, 55), Thickness = 1 })
+    local keySubmit = button(keyCard, "LIBERAR ACESSO")
+    keySubmit.Size = UDim2.new(1, -56, 0, 44)
+    keySubmit.Position = UDim2.fromOffset(28, 307)
     keySubmit.Modal = true
-    local keyFeedback = label(keyCard, "", 11)
-    keyFeedback.Size = UDim2.new(1, -40, 0, 24)
-    keyFeedback.Position = UDim2.fromOffset(20, 330)
+    local keyFeedback = label(keyCard, "Use a key fornecida pelo vendedor.", 11)
+    keyFeedback.Size = UDim2.new(1, -48, 0, 44)
+    keyFeedback.Position = UDim2.fromOffset(24, 363)
+    keyFeedback.TextWrapped = true
     keyFeedback.TextXAlignment = Enum.TextXAlignment.Center
     local keyClose = button(keyCard, "X")
-    keyClose.Size = UDim2.fromOffset(26, 24)
-    keyClose.Position = UDim2.new(1, -36, 0, 10)
+    keyClose.Size = UDim2.fromOffset(28, 26)
+    keyClose.Position = UDim2.new(1, -40, 0, 12)
+    keyClose.BackgroundColor3 = Color3.fromRGB(32, 32, 32)
+    keyClose.TextColor3 = ACCENT
 
-    local function lockExpiredLicense()
-        if not unlocked then return end
+    local onlineKey = nil
+    local onlineBusy = false
+    local onlineGeneration = 0
+    local function lockExpiredLicense(reason)
+        onlineGeneration = onlineGeneration + 1
+        onlineKey = nil
         unlocked = false
         licenseState.data = nil
         licenseState.deadline = nil
@@ -1938,60 +1932,105 @@ local function start()
         setMenu(false)
         keyBox.Text = ""
         keyLayer.Visible = true
-        keyFeedback.Text = "Sua key expirou. Peca uma nova ao vendedor."
+        keyFeedback.Text = reason or "Licenca encerrada. Confira sua key e a conexao."
         licenseInfoLabel.Text = "Nenhuma licenca ativa."
         statusMessage = nil
         refreshAll()
     end
-
     local function licenseIsActive()
         if not unlocked or not licenseState.data then return false end
-        local expires = licenseState.data.expiresAt
-        if expires ~= 0 and (os.time() >= expires
-            or licenseState.deadline and os.clock() >= licenseState.deadline) then
+        if not licenseState.deadline or os.clock() >= licenseState.deadline then
             lockExpiredLicense()
             return false
         end
         return true
     end
-
-    local function validateKey()
-        if unlocked or not alive then return end
-        keyFeedback.Text = "Conferindo key..."
-        local verified, data, validationError = pcall(LicensePolicy.check, keyBox.Text, os.time(), player.UserId,
+    local function requestLicense(key)
+        local requester = profiles.requester()
+        if not requester then return nil, "Este executor precisa suportar request HTTP.", false end
+        local nonce = HttpService:GenerateGUID(false):lower()
+        local began = os.clock()
+        local ok, response = pcall(requester, {
+            Url = LICENSE_SERVER .. "/service33/license", Method = "POST",
+            Headers = { ["Content-Type"] = "application/json", ["Accept"] = "application/json", ["User-Agent"] = "33-Hub/5.0" },
+            Body = HttpService:JSONEncode({ key = key, userId = player.UserId, nonce = nonce }),
+            Timeout = 12,
+        })
+        local elapsed = os.clock() - began
+        if not ok or type(response) ~= "table" then return nil, "Sem conexao com o servidor de keys.", false end
+        local status = tonumber(response.StatusCode or response.Status or response.status_code)
+        local body = response.Body or response.body
+        local parsed, result = pcall(function() return HttpService:JSONDecode(body) end)
+        if not parsed or type(result) ~= "table" then
+            return nil, "Servidor indisponivel. Confira se o acesso online foi liberado.", false
+        end
+        if status ~= 200 then
+            return nil, type(result.error) == "string" and result.error or "Nao foi possivel validar.", status == 403
+        end
+        local checked, data, err = pcall(LicenseOnline.check, result.receipt, nonce, player.UserId,
             function(raw) return HttpService:JSONDecode(raw) end, LicenseCrypto)
-        if not verified then
-            warn("[33] Validacao de licenca: " .. tostring(data))
-            keyFeedback.Text = "Nao foi possivel conferir a key."
-            return
-        end
-        if not data then
-            keyFeedback.Text = validationError
-            return
-        end
-        licenseState.data = data
-        if data.expiresAt ~= 0 then
-            local remaining = data.expiresAt - os.time()
-            if remaining <= 0 then
-                licenseState.data = nil
-                keyFeedback.Text = "Essa key expirou. Peca uma nova ao vendedor."
-                return
-            end
-            licenseState.deadline = os.clock() + remaining
-        else
-            licenseState.deadline = nil
-        end
+        if not checked or not data then return nil, err or "Resposta de licenca invalida.", true end
+        local remaining = data.expiresAt - data.issuedAt - elapsed
+        if remaining <= 0 then return nil, "A resposta demorou demais. Tente novamente.", false end
+        return { data = data, deadline = os.clock() + remaining }
+    end
+    local function applyLicense(result)
+        licenseState.data = result.data
+        licenseState.deadline = result.deadline
+        local expires = result.data.licenseExpiresAt
+        local validity = expires == 0 and "Permanente" or os.date("!%d/%m/%Y %H:%M:%S UTC", expires)
+        licenseInfoLabel.Text = "CLIENTE: " .. (result.data.customer ~= "" and result.data.customer or "33")
+            .. "\nVALIDADE: " .. validity .. "\nVALIDACAO ONLINE ATIVA"
+    end
+    local function validateKey()
+        if unlocked or not alive or onlineBusy then return end
+        local key = LicenseOnline.normalize(keyBox.Text)
+        if not key then keyFeedback.Text = "Use o formato 33-XXXX-XXXX-XXXX." return end
+        keyBox.Text = key
+        onlineBusy = true
+        keySubmit.Text = "VALIDANDO..."
+        keyFeedback.Text = "Conectando ao servidor de keys..."
+        local generation = onlineGeneration
+        local result, err = requestLicense(key)
+        onlineBusy = false
+        if not alive or generation ~= onlineGeneration then return end
+        keySubmit.Text = "LIBERAR ACESSO"
+        if not result then keyFeedback.Text = err return end
+        onlineKey = key
+        applyLicense(result)
         unlocked = true
         keyBox:ReleaseFocus()
         keyLayer.Visible = false
         selectTab("MIRA")
         setMenu(true)
         keyFeedback.Text = ""
-        local validity = data.expiresAt == 0 and "Sem prazo"
-            or os.date("!%d/%m/%Y %H:%M:%S UTC", data.expiresAt)
-        licenseInfoLabel.Text = "LICENCA: " .. data.id .. "\nVALIDADE: " .. validity
-        message("33 liberado. Veja a validade na aba MENU.")
+        message("Bem-vindo ao 33. Seu acesso esta ativo.")
     end
+    task.spawn(function()
+        local nextRefresh = os.clock() + 25
+        while alive do
+            task.wait(1)
+            if not alive then break end
+            if unlocked and not licenseIsActive() then nextRefresh = os.clock() + 25 end
+            if unlocked and onlineKey and not onlineBusy and os.clock() >= nextRefresh then
+                onlineBusy = true
+                local generation = onlineGeneration
+                local result, err, denied = requestLicense(onlineKey)
+                onlineBusy = false
+                if alive and unlocked and generation == onlineGeneration then
+                    if result then
+                        applyLicense(result)
+                        nextRefresh = os.clock() + 25
+                    elseif denied then
+                        lockExpiredLicense(err)
+                    else
+                        nextRefresh = os.clock() + 5
+                        message("Reconectando ao servidor de keys...")
+                    end
+                end
+            end
+        end
+    end)
 
     connect(keySubmit.Activated, validateKey)
     connect(keyBox.FocusLost, function(enterPressed)
@@ -2195,8 +2234,11 @@ local function start()
                 statusLabel.Text = "Mira: " .. aimStatus .. " | Speed: " .. speedStatus
                     .. " | Voo: " .. (State.Fly.Enabled and "ON" or "OFF")
                 if licenseState.deadline then
-                    local seconds = math.max(0, math.ceil(licenseState.deadline - os.clock()))
-                    statusLabel.Text = "KEY: " .. seconds .. "s | " .. statusLabel.Text
+                    local data = licenseState.data
+                    if data and data.licenseExpiresAt ~= 0 then
+                        local seconds = math.max(0, math.ceil(data.licenseExpiresAt - data.expiresAt + licenseState.deadline - os.clock()))
+                        statusLabel.Text = "KEY: " .. seconds .. "s | " .. statusLabel.Text
+                    end
                 end
             end
         end
